@@ -642,12 +642,9 @@ public:
 
   // Local hack: push a notification with the given text, cut to the firmware's limit like a real one
   void send_text_notification(const std::string& title, const std::string& message) {
-    Pinetime::Controllers::NotificationManager::Notification notif;
     std::string text = title + '\0' + message;
     text.resize(std::min(text.size(), Pinetime::Controllers::NotificationManager::MaximumMessageSize() - 1));
-    std::copy(text.begin(), text.end(), notif.message.data());
-    notif.message[text.size()] = '\0';
-    notif.size = text.size() + 1;
+    Pinetime::Controllers::NotificationManager::Notification notif(text.c_str(), text.size() + 1);
     notif.category = Pinetime::Controllers::NotificationManager::Categories::SimpleAlert;
     notificationManager.Push(std::move(notif));
   }
@@ -1151,7 +1148,9 @@ int main(int argc, char** argv) {
     usleep(LV_DISP_DEF_REFR_PERIOD * 1000);
     if (scripted_keys != nullptr && ++frame % (250 / LV_DISP_DEF_REFR_PERIOD) == 0) {
       if (*scripted_keys == '\0') {
-        return 0;
+        // Not "return": exit handlers shut SDL down while the display thread is still drawing
+        fflush(nullptr);
+        _exit(0);
       }
       if (*scripted_keys == '{') {
         // "{N}" starts app N (index into Pinetime::Applications::Apps)
