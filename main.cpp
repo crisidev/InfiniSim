@@ -102,6 +102,9 @@ typedef struct {
 extern monitor_t monitor;
 }
 
+// Local hack: name for the next screenshot, set by "[name]" in INFINISIM_KEYS
+std::string next_screenshot_name;
+
 void saveScreenshot() {
   auto now = std::chrono::system_clock::now();
   auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -109,6 +112,10 @@ void saveScreenshot() {
   std::stringstream ss;
   ss << "InfiniSim_" << std::put_time(std::localtime(&in_time_t), "%F_%H%M%S");
   std::string screenshot_filename_base = ss.str();
+  if (!next_screenshot_name.empty()) {
+    screenshot_filename_base = next_screenshot_name;
+    next_screenshot_name.clear();
+  }
   // TODO: use std::format once we have C++20 and new enough GCC 13
   // std::string screenshot_filename_base = std::format("InfiniSim_%F_%H%M%S", std::chrono::floor<std::chrono::seconds>(now));
   // std::string screenshot_filename_base = "InfiniSim";
@@ -633,6 +640,18 @@ public:
   };
   size_t notification_idx = 0; // which message to send next
 
+  // Local hack: push a notification with the given text, cut to the firmware's limit like a real one
+  void send_text_notification(const std::string& title, const std::string& message) {
+    Pinetime::Controllers::NotificationManager::Notification notif;
+    std::string text = title + '\0' + message;
+    text.resize(std::min(text.size(), Pinetime::Controllers::NotificationManager::MaximumMessageSize() - 1));
+    std::copy(text.begin(), text.end(), notif.message.data());
+    notif.message[text.size()] = '\0';
+    notif.size = text.size() + 1;
+    notif.category = Pinetime::Controllers::NotificationManager::Categories::SimpleAlert;
+    notificationManager.Push(std::move(notif));
+  }
+
   void send_notification() {
     const std::string& title = notification_messages.at(notification_idx * 2);
     const std::string& message = notification_messages.at(notification_idx * 2 + 1);
@@ -1122,11 +1141,39 @@ int main(int argc, char** argv) {
   // initialize the core of our Simulator
   Framework fw(fw_status_window_visible, 240, 240);
 
+  // Local hack: replay INFINISIM_KEYS, one key every 250ms, then exit (for headless screenshots)
+  const char* scripted_keys = getenv("INFINISIM_KEYS");
+  unsigned frame = 0;
   while (1) {
     fw.handle_keys(); // key event polling
     fw.handle_touch_and_button();
     fw.refresh();
     usleep(LV_DISP_DEF_REFR_PERIOD * 1000);
+    if (scripted_keys != nullptr && ++frame % (250 / LV_DISP_DEF_REFR_PERIOD) == 0) {
+      if (*scripted_keys == '\0') {
+        return 0;
+      }
+      if (*scripted_keys == '{') {
+        // "{N}" starts app N (index into Pinetime::Applications::Apps)
+        char* end;
+        auto app = static_cast<Pinetime::Applications::Apps>(strtol(scripted_keys + 1, &end, 10));
+        displayApp.StartApp(app, Pinetime::Applications::DisplayApp::FullRefreshDirections::None);
+        scripted_keys = end + 1;
+      } else if (*scripted_keys == '(') {
+        // "(title|message)" pushes a notification with that text
+        const char* bar = strchr(scripted_keys, '|');
+        const char* end = strchr(bar, ')');
+        fw.send_text_notification(std::string(scripted_keys + 1, bar), std::string(bar + 1, end));
+        scripted_keys = end + 1;
+      } else if (*scripted_keys == '[') {
+        // "[name]" names the next screenshot
+        const char* end = strchr(scripted_keys, ']');
+        next_screenshot_name.assign(scripted_keys + 1, end);
+        scripted_keys = end + 1;
+      } else {
+        fw.handle_key(*scripted_keys++);
+      }
+    }
   }
 
   return 0;
